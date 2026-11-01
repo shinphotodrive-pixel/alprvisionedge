@@ -14,12 +14,16 @@ import {
   Columns3,
   Layers,
   TableProperties,
-  TrendingUp
+  TrendingUp,
+  Download,
+  Award,
+  Target
 } from 'lucide-react';
 import { DETECTION_MODELS, DetectionModel } from '../../data/alprData';
 import { SideBySideComparisonTable } from './SideBySideComparisonTable';
 import { ModelComparisonBarChart } from '../charts/ModelComparisonBarChart';
 import { YoloEvolutionLineChart } from '../charts/YoloEvolutionLineChart';
+import { ModelDetailDrawer } from './ModelDetailDrawer';
 
 interface ModelMetricsViewProps {
   activeDevice: 'jetson' | 'rk3588';
@@ -29,10 +33,12 @@ type SubTab = 'side_by_side' | 'evolution_trend' | 'visualizer_lab' | 'full_tabl
 
 export const ModelMetricsView: React.FC<ModelMetricsViewProps> = ({ activeDevice }) => {
   const [activeSubTab, setActiveSubTab] = useState<SubTab>('side_by_side');
+  const [focusMode, setFocusMode] = useState<'accuracy' | 'speed'>('accuracy');
   const [metricView, setMetricView] = useState<'map_latency' | 'params_flops'>('map_latency');
   const [selectedFamily, setSelectedFamily] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [distractorEnv, setDistractorEnv] = useState<'night_glare' | 'signboard' | 'occlusion'>('night_glare');
+  const [selectedModelForDrawer, setSelectedModelForDrawer] = useState<DetectionModel | null>(null);
 
   // Filtered models
   const filteredModels = DETECTION_MODELS.filter((m) => {
@@ -42,6 +48,56 @@ export const ModelMetricsView: React.FC<ModelMetricsViewProps> = ({ activeDevice
                           m.recommendedUse.toLowerCase().includes(searchQuery.toLowerCase());
     return matchesFamily && matchesSearch;
   });
+
+  // Export current table to CSV
+  const exportCurrentTableCsv = () => {
+    const headers = [
+      'Model Name',
+      'Family',
+      'Parameters (M)',
+      'FLOPs (G)',
+      'COCO mAP (%)',
+      `Latency (${activeDevice === 'jetson' ? 'Jetson Orin' : 'RK3588'} ms)`,
+      'Throughput (FPS)',
+      'NMS Required',
+      'Warning Status',
+      'Core Architecture',
+      'Recommended Use'
+    ];
+    const rows = filteredModels.map((m) => {
+      const lat = getLatency(m);
+      const fps = getFps(m);
+      const isHighLat = lat > 30;
+      const isLowMap = m.map50_95 < 40 || m.map50_95 < 0.70;
+      let warning = 'Normal';
+      if (isHighLat && isLowMap) warning = 'Latency > 30ms & Low mAP (<0.70)';
+      else if (isHighLat) warning = 'Latency > 30ms';
+      else if (isLowMap) warning = 'mAP < 0.70 (<40%)';
+
+      return [
+        `"${m.name}"`,
+        `"${m.family}"`,
+        m.params,
+        m.flops,
+        m.map50_95,
+        lat.toFixed(2),
+        fps,
+        `"${m.nmsRequired ? 'Yes' : 'No (NMS-Free)'}"`,
+        `"${warning}"`,
+        `"${m.architecture.replace(/"/g, '""')}"`,
+        `"${m.recommendedUse.replace(/"/g, '""')}"`
+      ].join(',');
+    });
+
+    const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + [headers.join(','), ...rows].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `alpr_model_metrics_${activeDevice}_${focusMode}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   // Distractor scores simulation
   const distractorScores = {
@@ -80,14 +136,17 @@ export const ModelMetricsView: React.FC<ModelMetricsViewProps> = ({ activeDevice
     <div className="space-y-6">
       {/* Intro Header & Sub-Tab Navigation Bar */}
       <div className="bg-slate-900 border border-slate-800 p-5 sm:p-6 rounded-2xl shadow-sm space-y-4">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div>
-            <div className="flex items-center gap-2 mb-1.5">
+            <div className="flex items-center gap-2 mb-1.5 flex-wrap">
               <span className="px-2.5 py-0.5 rounded-full bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 text-xs font-semibold">
                 Section 2. 객체 인식 및 번호판 탐지
               </span>
               <span className="text-xs text-slate-400 font-mono-code">
                 YOLOv8 / YOLOv9 / YOLOv10 / YOLOv11 / YOLOv12 / RT-DETR
+              </span>
+              <span className="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono-code border border-slate-700">
+                타겟: {activeDevice === 'jetson' ? 'NVIDIA Jetson Orin NX' : 'Rockchip RK3588'}
               </span>
             </div>
             <h2 className="text-lg sm:text-xl font-bold text-white tracking-tight">
@@ -96,6 +155,50 @@ export const ModelMetricsView: React.FC<ModelMetricsViewProps> = ({ activeDevice
             <p className="text-xs sm:text-sm text-slate-400 mt-1 max-w-3xl leading-relaxed">
               YOLOv8부터 최신 YOLOv12까지의 진화 과정(PGI 정보 보존, NMS-Free 일관 이중 할당, 트랜스포머 하이브리드)과 전역 어텐션 기반 RT-DETR 간의 성능 지표를 다차원으로 비교합니다.
             </p>
+          </div>
+
+          {/* Action Toolbar: Focus Mode Toggle + Download CSV Button */}
+          <div className="flex flex-wrap items-center gap-2.5">
+            {/* Accuracy vs Speed Toggle Switch */}
+            <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800 shadow-inner">
+              <button
+                type="button"
+                onClick={() => setFocusMode('accuracy')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                  focusMode === 'accuracy'
+                    ? 'bg-sky-600 text-white shadow-sm'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+                title="mAP 정밀도 중심 차트 및 분석 뷰"
+              >
+                <Target className="w-3.5 h-3.5" />
+                <span>정밀도 중심 (mAP)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setFocusMode('speed')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                  focusMode === 'speed'
+                    ? 'bg-amber-600 text-white shadow-sm'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+                title="지연시간 및 FPS 실시간 처리량 중심 뷰"
+              >
+                <Zap className="w-3.5 h-3.5" />
+                <span>속도 중심 (Latency/FPS)</span>
+              </button>
+            </div>
+
+            {/* Download CSV Button */}
+            <button
+              type="button"
+              onClick={exportCurrentTableCsv}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 hover:border-slate-600 text-xs font-semibold shadow-sm transition active:scale-95"
+              title="현재 필터링된 성능 지표 테이블을 CSV 파일로 다운로드합니다"
+            >
+              <Download className="w-3.5 h-3.5 text-sky-400" />
+              <span>Download CSV</span>
+            </button>
           </div>
         </div>
 
@@ -159,12 +262,20 @@ export const ModelMetricsView: React.FC<ModelMetricsViewProps> = ({ activeDevice
 
       {/* SUB-TAB 1: DEDICATED SIDE-BY-SIDE COMPARISON TABLE */}
       {activeSubTab === 'side_by_side' && (
-        <SideBySideComparisonTable activeDevice={activeDevice} />
+        <SideBySideComparisonTable
+          activeDevice={activeDevice}
+          focusMode={focusMode}
+          onFocusModeChange={setFocusMode}
+          onSelectModel={setSelectedModelForDrawer}
+        />
       )}
 
       {/* SUB-TAB 2: YOLO EVOLUTION LINE CHART */}
       {activeSubTab === 'evolution_trend' && (
-        <YoloEvolutionLineChart />
+        <YoloEvolutionLineChart
+          focusMode={focusMode}
+          onFocusModeChange={setFocusMode}
+        />
       )}
 
       {/* SUB-TAB 3: VISUALIZER & DISTRACTOR LAB */}
@@ -216,6 +327,8 @@ export const ModelMetricsView: React.FC<ModelMetricsViewProps> = ({ activeDevice
               models={filteredModels}
               activeDevice={activeDevice}
               compact={true}
+              focusMode={focusMode}
+              onFocusModeChange={setFocusMode}
             />
 
             {/* Visual Bars List */}
@@ -426,7 +539,7 @@ export const ModelMetricsView: React.FC<ModelMetricsViewProps> = ({ activeDevice
               </span>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <div className="relative">
                 <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-2.5" />
                 <input
@@ -451,6 +564,37 @@ export const ModelMetricsView: React.FC<ModelMetricsViewProps> = ({ activeDevice
                 <option value="YOLOv12">YOLOv12 (Hybrid ViT)</option>
                 <option value="RT-DETR">RT-DETR (Transformer)</option>
               </select>
+
+              <button
+                type="button"
+                onClick={exportCurrentTableCsv}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold shadow-sm transition active:scale-95"
+                title="현재 테이블 데이터를 CSV 파일로 다운로드합니다"
+              >
+                <Download className="w-3.5 h-3.5 text-sky-400" />
+                <span>CSV 내보내기</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Conditional Formatting Banner Legend & Info Drawer Tip */}
+          <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>
+                <strong className="text-amber-300">조건부 서식(Conditional Formatting) 활성화:</strong> 지연시간이 <strong>30ms를 초과</strong>(실시간 30 FPS 미달 위험)하거나 mAP가 <strong>0.70(40.0%) 미만</strong>인 모델은 은은한 경고 배경색과 플래그로 강조 표시됩니다.
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono-code shrink-0">
+              <span className="px-2 py-0.5 rounded bg-sky-500/20 text-sky-300 border border-sky-500/30 flex items-center gap-1 font-sans font-medium">
+                <Info className="w-3 h-3 text-sky-400" /> 모델명 클릭 시 상세 사양 드로어 열림
+              </span>
+              <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                ⚠️ 지연 &gt; 30ms
+              </span>
+              <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                ⚠️ mAP &lt; 0.70 (40%)
+              </span>
             </div>
           </div>
 
@@ -458,6 +602,7 @@ export const ModelMetricsView: React.FC<ModelMetricsViewProps> = ({ activeDevice
             <table className="w-full text-left text-xs border-collapse">
               <thead>
                 <tr className="bg-slate-950/70 text-slate-400 font-semibold border-b border-slate-800">
+                  <th className="p-3.5">상태</th>
                   <th className="p-3.5">모델 아키텍처</th>
                   <th className="p-3.5">Scale (Params / FLOPs)</th>
                   <th className="p-3.5">COCO mAP (%)</th>
@@ -472,16 +617,70 @@ export const ModelMetricsView: React.FC<ModelMetricsViewProps> = ({ activeDevice
                 {filteredModels.map((m) => {
                   const latency = getLatency(m);
                   const fps = getFps(m);
+                  const isLatencyWarning = latency > 30;
+                  const isMapWarning = m.map50_95 < 40.0 || m.map50_95 < 0.70;
+                  const hasWarning = isLatencyWarning || isMapWarning;
+
                   return (
-                    <tr key={m.id} className="hover:bg-slate-800/40 transition">
+                    <tr
+                      key={m.id}
+                      className={`transition ${
+                        hasWarning
+                          ? 'bg-amber-500/10 hover:bg-amber-500/20 border-l-4 border-l-amber-500'
+                          : 'hover:bg-slate-800/40'
+                      }`}
+                    >
+                      <td className="p-3.5 whitespace-nowrap">
+                        {hasWarning ? (
+                          <div className="flex items-center gap-1 text-amber-400 font-semibold" title={isLatencyWarning && isMapWarning ? '지연시간 30ms 초과 및 mAP 0.70 미달' : isLatencyWarning ? '지연시간 30ms 초과' : 'mAP 0.70(40%) 미달'}>
+                            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                            <span className="text-[11px] font-mono-code">주의</span>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1 text-emerald-400 font-semibold">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                            <span className="text-[11px] font-mono-code text-slate-400">정상</span>
+                          </div>
+                        )}
+                      </td>
                       <td className="p-3.5 font-bold text-white whitespace-nowrap">
-                        {m.name}
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedModelForDrawer(m)}
+                            className="group/mname flex items-center gap-1.5 hover:text-sky-400 text-left transition font-bold"
+                            title="클릭하여 상세 아키텍처 및 하드웨어 사양 보기"
+                          >
+                            <span className="group-hover/mname:underline decoration-sky-400/50">{m.name}</span>
+                            <span className="p-0.5 rounded bg-slate-800 text-slate-400 group-hover/mname:text-sky-300 group-hover/mname:bg-sky-500/20 transition">
+                              <Info className="w-3 h-3 shrink-0" />
+                            </span>
+                          </button>
+                          {isLatencyWarning && (
+                            <span className="text-[10px] font-sans px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                              지연주의
+                            </span>
+                          )}
+                          {isMapWarning && (
+                            <span className="text-[10px] font-sans px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                              저정밀주의
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="p-3.5 font-mono-code text-slate-400 whitespace-nowrap">
                         {m.params}M / {m.flops}G
                       </td>
-                      <td className="p-3.5 font-mono-code font-bold text-sky-400 whitespace-nowrap">
-                        {m.map50_95}%
+                      <td className="p-3.5 font-mono-code font-bold whitespace-nowrap">
+                        {isMapWarning ? (
+                          <div className="inline-flex items-center gap-1 text-amber-300 bg-amber-500/20 px-2 py-0.5 rounded border border-amber-500/40">
+                            <AlertTriangle className="w-3 h-3 text-amber-400" />
+                            <span>{m.map50_95}%</span>
+                            <span className="text-[10px] text-amber-400 font-mono-code">(&lt;0.70)</span>
+                          </div>
+                        ) : (
+                          <span className="text-sky-400">{m.map50_95}%</span>
+                        )}
                       </td>
                       <td className="p-3.5 whitespace-nowrap">
                         <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
@@ -495,11 +694,21 @@ export const ModelMetricsView: React.FC<ModelMetricsViewProps> = ({ activeDevice
                       <td className="p-3.5 font-mono-code text-slate-400 whitespace-nowrap">
                         {m.latencyA100.toFixed(2)}ms
                       </td>
-                      <td className="p-3.5 font-mono-code font-bold text-amber-400 whitespace-nowrap">
-                        {latency.toFixed(1)}ms
+                      <td className="p-3.5 font-mono-code font-bold whitespace-nowrap">
+                        {isLatencyWarning ? (
+                          <div className="inline-flex items-center gap-1 text-amber-300 bg-amber-500/20 px-2 py-0.5 rounded border border-amber-500/40">
+                            <AlertTriangle className="w-3 h-3 text-amber-400" />
+                            <span>{latency.toFixed(1)}ms</span>
+                            <span className="text-[10px] text-amber-400 font-mono-code">(&gt;30ms)</span>
+                          </div>
+                        ) : (
+                          <span className="text-amber-400">{latency.toFixed(1)}ms</span>
+                        )}
                       </td>
-                      <td className="p-3.5 font-mono-code font-bold text-emerald-400 whitespace-nowrap">
-                        {fps} FPS
+                      <td className="p-3.5 font-mono-code font-bold whitespace-nowrap">
+                        <span className={fps < 30 ? 'text-amber-400 font-bold' : 'text-emerald-400'}>
+                          {fps} FPS
+                        </span>
                       </td>
                       <td className="p-3.5 text-xs text-slate-400">
                         <div className="font-medium text-slate-200">{m.recommendedUse}</div>
@@ -513,6 +722,13 @@ export const ModelMetricsView: React.FC<ModelMetricsViewProps> = ({ activeDevice
           </div>
         </div>
       )}
+
+      {/* Model Specification & Architecture Detail Drawer */}
+      <ModelDetailDrawer
+        model={selectedModelForDrawer}
+        onClose={() => setSelectedModelForDrawer(null)}
+        activeDevice={activeDevice}
+      />
     </div>
   );
 };

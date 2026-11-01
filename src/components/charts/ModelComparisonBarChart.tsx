@@ -18,15 +18,54 @@ interface ModelComparisonBarChartProps {
   models: DetectionModel[];
   activeDevice: 'jetson' | 'rk3588';
   compact?: boolean;
+  focusMode?: 'accuracy' | 'speed';
+  onFocusModeChange?: (mode: 'accuracy' | 'speed') => void;
 }
 
 export const ModelComparisonBarChart: React.FC<ModelComparisonBarChartProps> = ({
   models,
   activeDevice,
-  compact = false
+  compact = false,
+  focusMode,
+  onFocusModeChange
 }) => {
-  const [metricMode, setMetricMode] = useState<'both' | 'map_only' | 'latency_only'>('both');
-  const [sortBy, setSortBy] = useState<'default' | 'map' | 'latency'>('default');
+  const [internalFocus, setInternalFocus] = useState<'accuracy' | 'speed'>(focusMode || 'accuracy');
+  const currentFocus = focusMode || internalFocus;
+
+  const [metricMode, setMetricMode] = useState<'both' | 'map_only' | 'latency_only'>(
+    currentFocus === 'accuracy' ? 'map_only' : 'latency_only'
+  );
+  const [sortBy, setSortBy] = useState<'default' | 'map' | 'latency'>(
+    currentFocus === 'accuracy' ? 'map' : 'latency'
+  );
+
+  // Sync with focusMode prop changes
+  React.useEffect(() => {
+    if (focusMode) {
+      setInternalFocus(focusMode);
+      if (focusMode === 'accuracy') {
+        setMetricMode('map_only');
+        setSortBy('map');
+      } else {
+        setMetricMode('latency_only');
+        setSortBy('latency');
+      }
+    }
+  }, [focusMode]);
+
+  const handleToggleFocus = (mode: 'accuracy' | 'speed') => {
+    setInternalFocus(mode);
+    if (mode === 'accuracy') {
+      setMetricMode('map_only');
+      setSortBy('map');
+    } else {
+      setMetricMode('latency_only');
+      setSortBy('latency');
+    }
+    if (onFocusModeChange) {
+      onFocusModeChange(mode);
+    }
+  };
 
   // Format data for Recharts
   const chartData = models.map((m) => {
@@ -142,31 +181,41 @@ export const ModelComparisonBarChart: React.FC<ModelComparisonBarChartProps> = (
 
         {/* View & Sort Toggles */}
         <div className="flex flex-wrap items-center gap-2 text-xs">
+          {/* Accuracy Focused vs Speed Focused Toggle Switch */}
+          <div className="flex items-center bg-slate-900 p-1 rounded-xl border border-slate-800">
+            <button
+              onClick={() => handleToggleFocus('accuracy')}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold transition ${
+                currentFocus === 'accuracy'
+                  ? 'bg-sky-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Award className="w-3.5 h-3.5" />
+              <span>정밀도 집중 (Accuracy Focused)</span>
+            </button>
+            <button
+              onClick={() => handleToggleFocus('speed')}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold transition ${
+                currentFocus === 'speed'
+                  ? 'bg-amber-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Zap className="w-3.5 h-3.5" />
+              <span>속도 집중 (Speed Focused)</span>
+            </button>
+          </div>
+
           {/* Metric Mode */}
           <div className="flex items-center bg-slate-900 p-1 rounded-xl border border-slate-800">
             <button
               onClick={() => setMetricMode('both')}
               className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition ${
-                metricMode === 'both' ? 'bg-sky-600 text-white font-bold' : 'text-slate-400 hover:text-white'
+                metricMode === 'both' ? 'bg-slate-700 text-white font-bold' : 'text-slate-400 hover:text-white'
               }`}
             >
-              mAP + Latency
-            </button>
-            <button
-              onClick={() => setMetricMode('map_only')}
-              className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition ${
-                metricMode === 'map_only' ? 'bg-sky-600 text-white font-bold' : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              mAP만
-            </button>
-            <button
-              onClick={() => setMetricMode('latency_only')}
-              className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition ${
-                metricMode === 'latency_only' ? 'bg-sky-600 text-white font-bold' : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              Latency만
+              양방향 전체
             </button>
           </div>
 

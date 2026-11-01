@@ -16,7 +16,10 @@ import {
   CheckCircle2,
   XCircle,
   HelpCircle,
-  BarChart3
+  BarChart3,
+  AlertTriangle,
+  Target,
+  Info
 } from 'lucide-react';
 import { DETECTION_MODELS, DetectionModel } from '../../data/alprData';
 import { ModelComparisonBarChart } from '../charts/ModelComparisonBarChart';
@@ -24,6 +27,9 @@ import { YoloEvolutionLineChart } from '../charts/YoloEvolutionLineChart';
 
 interface SideBySideComparisonTableProps {
   activeDevice: 'jetson' | 'rk3588';
+  focusMode?: 'accuracy' | 'speed';
+  onFocusModeChange?: (mode: 'accuracy' | 'speed') => void;
+  onSelectModel?: (model: DetectionModel) => void;
 }
 
 type ModelFamily = 'YOLOv8' | 'YOLOv9' | 'YOLOv10' | 'YOLOv11' | 'YOLOv12' | 'RT-DETR';
@@ -38,7 +44,10 @@ const ALL_FAMILIES: ModelFamily[] = [
 ];
 
 export const SideBySideComparisonTable: React.FC<SideBySideComparisonTableProps> = ({
-  activeDevice
+  activeDevice,
+  focusMode,
+  onFocusModeChange,
+  onSelectModel
 }) => {
   // Family selection state
   const [selectedFamilies, setSelectedFamilies] = useState<Record<ModelFamily, boolean>>({
@@ -195,19 +204,61 @@ export const SideBySideComparisonTable: React.FC<SideBySideComparisonTableProps>
     return list;
   }, [selectedFamilies, displayedModels]);
 
+  // Sync matrix table sort with focusMode
+  React.useEffect(() => {
+    if (focusMode === 'speed') {
+      setSortBy('latency');
+      setSortDesc(false);
+    } else if (focusMode === 'accuracy') {
+      setSortBy('map');
+      setSortDesc(true);
+    }
+  }, [focusMode]);
+
   // Export CSV
   const exportCsv = () => {
-    const headers = ['Model,Family,Params(M),FLOPs(G),mAP(%),Latency(ms),FPS,NMS Required,Architecture,Field'];
+    const headers = [
+      'Model',
+      'Family',
+      'Params(M)',
+      'FLOPs(G)',
+      'mAP(%)',
+      `Latency (${activeDevice === 'jetson' ? 'Jetson Orin' : 'RK3588'} ms)`,
+      'FPS',
+      'NMS Required',
+      'Warning Status',
+      'Architecture',
+      'Field'
+    ];
     const rows = displayedModels.map((m) => {
       const lat = getLatency(m);
       const fps = getFps(m);
-      return `"${m.name}","${m.family}",${m.params},${m.flops},${m.map50_95},${lat.toFixed(2)},${fps},"${m.nmsRequired ? 'Yes' : 'No'}","${m.architecture}","${m.recommendedUse}"`;
+      const isHighLat = lat > 30;
+      const isLowMap = m.map50_95 < 40.0 || m.map50_95 < 0.70;
+      let warning = 'Normal';
+      if (isHighLat && isLowMap) warning = 'Latency > 30ms & Low mAP (<0.70)';
+      else if (isHighLat) warning = 'Latency > 30ms';
+      else if (isLowMap) warning = 'mAP < 0.70 (<40%)';
+
+      return [
+        `"${m.name}"`,
+        `"${m.family}"`,
+        m.params,
+        m.flops,
+        m.map50_95,
+        lat.toFixed(2),
+        fps,
+        `"${m.nmsRequired ? 'Yes' : 'No'}"`,
+        `"${warning}"`,
+        `"${m.architecture.replace(/"/g, '""')}"`,
+        `"${m.recommendedUse.replace(/"/g, '""')}"`
+      ].join(',');
     });
-    const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + [headers, ...rows].join('\n');
+    const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + [headers.join(','), ...rows].join('\n');
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
     link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `alpr_models_comparison_${activeDevice}.csv`);
+    link.setAttribute('download', `alpr_side_by_side_comparison_${activeDevice}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -501,12 +552,17 @@ export const SideBySideComparisonTable: React.FC<SideBySideComparisonTableProps>
         <ModelComparisonBarChart
           models={displayedModels}
           activeDevice={activeDevice}
+          focusMode={focusMode}
+          onFocusModeChange={onFocusModeChange}
         />
       )}
 
       {/* Accuracy Evolution Line Chart (Recharts) */}
       {showLineChart && (
-        <YoloEvolutionLineChart />
+        <YoloEvolutionLineChart
+          focusMode={focusMode}
+          onFocusModeChange={onFocusModeChange}
+        />
       )}
 
       {/* VIEW STYLE 1: SIDE-BY-SIDE COLUMNS (Card Columns) */}
@@ -562,9 +618,19 @@ export const SideBySideComparisonTable: React.FC<SideBySideComparisonTableProps>
                       </div>
 
                       <div>
-                        <h4 className="text-sm font-bold text-white tracking-tight">
-                          {model.name}
-                        </h4>
+                        <button
+                          type="button"
+                          onClick={() => onSelectModel?.(model)}
+                          className="group/mbtn flex items-center gap-1.5 text-left hover:text-sky-400 transition"
+                          title="클릭하여 상세 아키텍처 및 하드웨어 사양 보기"
+                        >
+                          <h4 className="text-sm font-bold text-white group-hover/mbtn:text-sky-400 transition tracking-tight">
+                            {model.name}
+                          </h4>
+                          <span className="p-0.5 rounded bg-slate-800 text-slate-400 group-hover/mbtn:text-sky-300 group-hover/mbtn:bg-sky-500/20 transition">
+                            <Info className="w-3 h-3" />
+                          </span>
+                        </button>
                         <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">
                           {model.architecture}
                         </p>
@@ -702,10 +768,25 @@ export const SideBySideComparisonTable: React.FC<SideBySideComparisonTableProps>
             </div>
           </div>
 
+          {/* Conditional Warning Banner */}
+          <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/25 text-xs text-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span>
+                <strong>조건부 서식:</strong> 지연시간 &gt; 30ms (30 FPS 미달 위험) 또는 mAP &lt; 0.70 (40.0% 미만) 항목은 주황색 경고로 하이라이트됩니다.
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 text-[10px] font-mono-code shrink-0">
+              <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40">⚠️ &gt;30ms 지연</span>
+              <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40">⚠️ &lt;0.70 mAP</span>
+            </div>
+          </div>
+
           <div className="overflow-x-auto rounded-xl border border-slate-800">
             <table className="w-full text-left text-xs border-collapse">
               <thead>
                 <tr className="bg-slate-950 text-slate-400 font-semibold border-b border-slate-800 font-mono-code">
+                  <th className="p-3">상태</th>
                   <th className="p-3">아키텍처 계열</th>
                   <th className="p-3">모델명</th>
                   {showMap && <th className="p-3 text-right">COCO mAP (%)</th>}
@@ -723,40 +804,103 @@ export const SideBySideComparisonTable: React.FC<SideBySideComparisonTableProps>
                   const fps = getFps(m);
                   const isTopMap = m.map50_95 === maxMap;
                   const isTopFps = fps === maxFps;
+                  const isLatencyWarning = latency > 30;
+                  const isMapWarning = m.map50_95 < 40.0 || m.map50_95 < 0.70;
+                  const hasWarning = isLatencyWarning || isMapWarning;
 
                   return (
-                    <tr key={m.id} className="hover:bg-slate-800/50 transition">
+                    <tr
+                      key={m.id}
+                      className={`transition ${
+                        hasWarning
+                          ? 'bg-amber-500/10 hover:bg-amber-500/20 border-l-4 border-l-amber-500 text-amber-100'
+                          : 'hover:bg-slate-800/50'
+                      }`}
+                    >
+                      <td className="p-3 whitespace-nowrap">
+                        {hasWarning ? (
+                          <div className="flex items-center gap-1 text-amber-400" title="조건부 서식 경고 플래그">
+                            <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                            <span className="text-[10px] font-bold">주의</span>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1 text-emerald-400">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                            <span className="text-[10px] text-slate-500">적합</span>
+                          </div>
+                        )}
+                      </td>
                       <td className="p-3 whitespace-nowrap">
                         <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${getFamilyBadge(m.family)}`}>
                           {m.family}
                         </span>
                       </td>
                       <td className="p-3 font-bold text-white whitespace-nowrap font-sans">
-                        {m.name}
-                        {isTopMap && (
-                          <span className="ml-1.5 px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 text-[9px] border border-amber-500/30">
-                            최고정밀
-                          </span>
-                        )}
-                        {isTopFps && !isTopMap && (
-                          <span className="ml-1.5 px-1.5 py-0.2 rounded bg-sky-500/20 text-sky-300 text-[9px] border border-sky-500/30">
-                            최고FPS
-                          </span>
-                        )}
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => onSelectModel?.(m)}
+                            className="group/mrow flex items-center gap-1.5 hover:text-sky-400 text-left transition font-bold"
+                            title="클릭하여 상세 아키텍처 및 하드웨어 사양 보기"
+                          >
+                            <span className="group-hover/mrow:underline decoration-sky-400/50">{m.name}</span>
+                            <span className="p-0.5 rounded bg-slate-800/80 text-slate-500 group-hover/mrow:text-sky-300 group-hover/mrow:bg-sky-500/20 transition">
+                              <Info className="w-3 h-3 shrink-0" />
+                            </span>
+                          </button>
+                          {isTopMap && (
+                            <span className="px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 text-[9px] border border-amber-500/30">
+                              최고정밀
+                            </span>
+                          )}
+                          {isTopFps && !isTopMap && (
+                            <span className="px-1.5 py-0.2 rounded bg-sky-500/20 text-sky-300 text-[9px] border border-sky-500/30">
+                              최고FPS
+                            </span>
+                          )}
+                          {isLatencyWarning && (
+                            <span className="px-1 py-0.2 rounded bg-amber-500/25 text-amber-300 text-[9px] border border-amber-500/40">
+                              &gt;30ms
+                            </span>
+                          )}
+                          {isMapWarning && (
+                            <span className="px-1 py-0.2 rounded bg-amber-500/25 text-amber-300 text-[9px] border border-amber-500/40">
+                              &lt;0.70
+                            </span>
+                          )}
+                        </div>
                       </td>
                       {showMap && (
-                        <td className="p-3 text-right font-bold text-sky-400 whitespace-nowrap">
-                          {m.map50_95}%
+                        <td className="p-3 text-right font-bold whitespace-nowrap">
+                          {isMapWarning ? (
+                            <div className="inline-flex items-center gap-1 text-amber-300 bg-amber-500/20 px-1.5 py-0.5 rounded border border-amber-500/40">
+                              <AlertTriangle className="w-3 h-3 text-amber-400" />
+                              <span>{m.map50_95}%</span>
+                              <span className="text-[9px] text-amber-400">(&lt;0.70)</span>
+                            </div>
+                          ) : (
+                            <span className="text-sky-400">{m.map50_95}%</span>
+                          )}
                         </td>
                       )}
                       {showLatency && (
-                        <td className="p-3 text-right font-bold text-amber-400 whitespace-nowrap">
-                          {latency.toFixed(1)}ms
+                        <td className="p-3 text-right font-bold whitespace-nowrap">
+                          {isLatencyWarning ? (
+                            <div className="inline-flex items-center gap-1 text-amber-300 bg-amber-500/20 px-1.5 py-0.5 rounded border border-amber-500/40">
+                              <AlertTriangle className="w-3 h-3 text-amber-400" />
+                              <span>{latency.toFixed(1)}ms</span>
+                              <span className="text-[9px] text-amber-400">(&gt;30ms)</span>
+                            </div>
+                          ) : (
+                            <span className="text-amber-400">{latency.toFixed(1)}ms</span>
+                          )}
                         </td>
                       )}
                       {showFps && (
-                        <td className="p-3 text-right font-bold text-emerald-400 whitespace-nowrap">
-                          {fps} FPS
+                        <td className="p-3 text-right font-bold whitespace-nowrap">
+                          <span className={fps < 30 ? 'text-amber-400 font-bold' : 'text-emerald-400'}>
+                            {fps} FPS
+                          </span>
                         </td>
                       )}
                       {showParams && (
