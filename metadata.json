@@ -1,0 +1,6 @@
+{
+  "name": "ALPR & 지능형 교통 감시 모델 분석 대시보드",
+  "description": "차량 객체 인식(YOLOv8~v12, RT-DETR), 번호판 OCR(SVTR, PARSeq), 엣지 양자화(PTQ/QAT), DeepStream 및 차량 Re-ID 종합 분석 플랫폼",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
